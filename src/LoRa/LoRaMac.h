@@ -8,6 +8,7 @@
 #include "inet/queueing/contract/IPacketQueue.h"
 #include "LoRaMacControlInfo_m.h"
 #include "LoRaMacFrame_m.h"
+#include "../LoRaApp/LoRaAppPacket_m.h"   // AFLoRa: AppPacketType values used as the frame MType
 #include "inet/common/Protocol.h"
 #include "inet/queueing/contract/IActivePacketSink.h"
 #include "inet/queueing/contract/IPacketQueue.h"
@@ -52,6 +53,16 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     int cwMax = -1;
     int cwMulticast = -1;
     int sequenceNumber = 0;
+
+    // AFLoRa: the MAC owns the radio parameters (kept in the LoRaRadio members, which the PHY
+    // reads) and the end-device side of ADR.
+    LoRaRadio *loRaRadio = nullptr;
+    bool evaluateADRinNode = false;
+    int ADR_ACK_CNT = 0;
+    int ADR_ACK_LIMIT = 64;
+    int ADR_ACK_DELAY = 32;
+    bool sendNextPacketWithADRACKReq = false;
+    int sequenceNumberRemote = 0;
     //@}
 
     /** End of the Short Inter-Frame Time period */
@@ -138,9 +149,19 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     long numReceived;
     long numSentBroadcast;
     long numReceivedBroadcast;
+    long numADRCommandReceived;   // AFLoRa
     //@}
 
   public:
+    // AFLoRa: current radio parameters, as the MAC sets them.
+    virtual double getPresentTP();
+    virtual int getPresentSF();
+    virtual inet::units::values::Hz getPresentCF();
+    virtual inet::units::values::Hz getPresentBW();
+    virtual int getPresentCR();
+    // Spacing the app keeps between two packets (AFLoRa moved this table from SimpleLoRaApp).
+    virtual double getTimeOff();
+
     /**
      * @name Construction functions
      */
@@ -208,6 +229,13 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     void turnOnReceiver(void);
     void turnOffReceiver(void);
     virtual void processUpperPacket();
+
+    // AFLoRa
+    /** Downlink for this device: frame control and MAC commands (LinkADRReq). */
+    virtual void manageFrame(const Ptr<const LoRaMacFrame> &frame);
+    /** RX2 closed without a downlink: ADRACKReq counter and ADR backoff. */
+    virtual void setRetransmission();
+    virtual void increaseSFIfPossible();
     //@}
 };
 

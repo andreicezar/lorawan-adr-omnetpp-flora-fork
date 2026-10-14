@@ -79,6 +79,17 @@ void LoRaMac::initialize(int stage)
         radioModule->subscribe(LoRaRadio::droppedPacket, this);
         radio = check_and_cast<IRadio *>(radioModule);
 
+        // AFLoRa: the MAC sets the radio parameters (SimpleLoRaApp did it in FLoRa).
+        loRaRadio = check_and_cast<LoRaRadio *>(radio);
+        loRaRadio->loRaTP = par("initialLoRaTP").doubleValue();
+        loRaRadio->loRaCF = units::values::Hz(par("initialLoRaCF").doubleValue());
+        loRaRadio->loRaSF = par("initialLoRaSF");
+        loRaRadio->loRaBW = units::values::Hz(par("initialLoRaBW").doubleValue());
+        loRaRadio->loRaCR = par("initialLoRaCR");
+        loRaRadio->loRaUseHeader = par("initialUseHeader");
+        evaluateADRinNode = par("evaluateADRinNode");
+        sequenceNumberRemote = 0;
+
         // initialize self messages
         endTransmission = new cMessage("Transmission");
         endReception = new cMessage("Reception");
@@ -109,6 +120,7 @@ void LoRaMac::initialize(int stage)
         numReceived = 0;
         numSentBroadcast = 0;
         numReceivedBroadcast = 0;
+        numADRCommandReceived = 0;
 
         // initialize watches
         WATCH(fsm);
@@ -122,6 +134,9 @@ void LoRaMac::initialize(int stage)
         WATCH(numReceived);
         WATCH(numSentBroadcast);
         WATCH(numReceivedBroadcast);
+        WATCH(numADRCommandReceived);
+        WATCH(loRaRadio->loRaSF);
+        WATCH(loRaRadio->loRaTP);
     }
     else if (stage == INITSTAGE_LINK_LAYER)
         radio->setRadioMode(IRadio::RADIO_MODE_SLEEP);
@@ -137,6 +152,7 @@ void LoRaMac::finish()
     recordScalar("numReceived", numReceived);
     recordScalar("numSentBroadcast", numSentBroadcast);
     recordScalar("numReceivedBroadcast", numReceivedBroadcast);
+    recordScalar("numADRCommandReceived", numADRCommandReceived);
 }
 
 void LoRaMac::configureNetworkInterface()
@@ -297,6 +313,7 @@ void LoRaMac::handleWithFsm(cMessage *msg)
             FSMA_Event_Transition(Receive-Unicast,
                                   isLowerMessage(msg) && isForUs(frame),
                                   IDLE,
+                manageFrame(frame);
                 sendUp(decapsulate(pkt));
                 numReceived++;
                 cancelEvent(endListening_1);
@@ -323,6 +340,7 @@ void LoRaMac::handleWithFsm(cMessage *msg)
             FSMA_Event_Transition(Listening_2-idle,
                                   msg == endListening_2 || endListening_2->isScheduled() == false,
                                   IDLE,
+                setRetransmission();
             );
             FSMA_Event_Transition(Listening_2-Receiving2,
                                   msg == mediumStateChange && isReceiving(),
@@ -338,6 +356,7 @@ void LoRaMac::handleWithFsm(cMessage *msg)
             FSMA_Event_Transition(Receive2-Unicast,
                                   isLowerMessage(msg) && isForUs(frame),
                                   IDLE,
+                manageFrame(frame);
                 sendUp(pkt);
                 numReceived++;
                 cancelEvent(endListening_2);
@@ -412,7 +431,15 @@ Packet *LoRaMac::encapsulate(Packet *msg)
     auto frame = makeShared<LoRaMacFrame>();
     frame->setChunkLength(B(headerLength));
     msg->setArrival(msg->getArrivalModuleId(), msg->getArrivalGateId());
-    auto tag = msg->getTag<LoRaTag>();
+    // AFLoRa: TP, SF, CF, BW, CR and the header flag are set by the MAC, not by the app. The
+    // tag carries them on to LoRaRadio, which builds the preamble from it.
+    auto tag = msg->addTagIfAbsent<LoRaTag>();
+    tag->setPower(mW(math::dBmW2mW(getPresentTP())));
+    tag->setCenterFrequency(getPresentCF());
+    tag->setSpreadFactor(getPresentSF());
+    tag->setBandwidth(getPresentBW());
+    tag->setCodeRendundance(getPresentCR());
+    tag->setUseHeader(loRaRadio->loRaUseHeader);
 
     frame->setTransmitterAddress(address);
     frame->setLoRaTP(tag->getPower().get());
@@ -426,6 +453,19 @@ Packet *LoRaMac::encapsulate(Packet *msg)
     ++sequenceNumber;
     //frame->setLoRaUseHeader(cInfo->getLoRaUseHeader());
     frame->setLoRaUseHeader(tag->getUseHeader());
+
+    // AFLoRa: frame control. The ADR bit is set when the device runs ADR, and ADRACKReq once
+    // ADR_ACK_LIMIT uplinks went without a downlink.
+    frame->setMType(tag->getMType());
+    frame->setACK(false);
+    frame->setFOpsLen(NO_OPTIONS);
+    frame->setADRACKReq(false);
+    if (evaluateADRinNode) {
+        frame->setADR(true);
+        if (sendNextPacketWithADRACKReq)
+            frame->setADRACKReq(true);
+        sendNextPacketWithADRACKReq = false;
+    }
 
     msg->insertAtFront(frame);
 
@@ -549,6 +589,89 @@ void LoRaMac::turnOffReceiver()
 MacAddress LoRaMac::getAddress()
 {
     return address;
+}
+
+/****************************************************************
+ * AFLoRa: end-device ADR and radio parameters in the MAC.
+ */
+void LoRaMac::manageFrame(const Ptr<const LoRaMacFrame> &frame)
+{
+    sequenceNumberRemote = frame->getSequenceNumber();
+    // Any downlink resets the ADRACKReq counter; the options carry a LinkADRReq.
+    if (evaluateADRinNode) {
+        ADR_ACK_CNT = 0;
+        if (frame->getFOpsLen() != 0) {
+            numADRCommandReceived++;
+            // Truncated to whole dBm as SimpleLoRaApp::setTP(int) did in FLoRa 1.x (AFLoRa kept
+            // the value as a double); kept so that the default behaviour stays FLoRa's.
+            if (frame->getOptions().getLoRaTP() != -1)
+                loRaRadio->loRaTP = (int) frame->getOptions().getLoRaTP();
+            if (frame->getOptions().getLoRaSF() != -1)
+                loRaRadio->loRaSF = frame->getOptions().getLoRaSF();
+            EV << "New TP " << getPresentTP() << ", new SF " << getPresentSF() << endl;
+        }
+    }
+}
+
+void LoRaMac::setRetransmission()
+{
+    // No downlink in RX1 nor RX2: ADRACKReq after ADR_ACK_LIMIT uplinks, one SF step up after
+    // ADR_ACK_LIMIT + ADR_ACK_DELAY (FLoRa did this in SimpleLoRaApp when sending).
+    if (evaluateADRinNode) {
+        ADR_ACK_CNT++;
+        if (ADR_ACK_CNT == ADR_ACK_LIMIT)
+            sendNextPacketWithADRACKReq = true;
+        if (ADR_ACK_CNT >= ADR_ACK_LIMIT + ADR_ACK_DELAY) {
+            ADR_ACK_CNT = 0;
+            increaseSFIfPossible();
+        }
+    }
+}
+
+void LoRaMac::increaseSFIfPossible()
+{
+    if (loRaRadio->loRaSF < 12)
+        loRaRadio->loRaSF++;
+}
+
+double LoRaMac::getPresentTP()
+{
+    return loRaRadio->loRaTP;
+}
+
+int LoRaMac::getPresentSF()
+{
+    return loRaRadio->loRaSF;
+}
+
+units::values::Hz LoRaMac::getPresentCF()
+{
+    return loRaRadio->loRaCF;
+}
+
+units::values::Hz LoRaMac::getPresentBW()
+{
+    return loRaRadio->loRaBW;
+}
+
+int LoRaMac::getPresentCR()
+{
+    return loRaRadio->loRaCR;
+}
+
+double LoRaMac::getTimeOff()
+{
+    // 1% duty cycle for 20 B at CR 4/8: the shortest spacing SimpleLoRaApp accepts between two
+    // packets (values as in FLoRa's SimpleLoRaApp).
+    switch (loRaRadio->loRaSF) {
+        case 7: return 7.808;
+        case 8: return 13.9776;
+        case 9: return 24.6784;
+        case 10: return 49.3568;
+        case 11: return 85.6064;
+        case 12: return 171.2128;
+        default: return 0;
+    }
 }
 
 } // namespace inet

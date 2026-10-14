@@ -25,6 +25,7 @@
 #include "LoRaAppPacket_m.h"
 #include "LoRa/LoRaMacControlInfo_m.h"
 #include "LoRa/LoRaRadio.h"
+#include "LoRa/LoRaMac.h"
 
 using namespace omnetpp;
 using namespace inet;
@@ -45,12 +46,14 @@ class SimpleLoRaApp : public cSimpleModule, public ILifecycle
 
         void handleMessageFromLowerLayer(cMessage *msg);
         std::pair<double,double> generateUniformCircleCoordinates(double radius, double gatewayX, double gatewayY);
-        void sendJoinRequest();
         void sendDownMgmtPacket();
+        // AFLoRa: data uplinks (sendJoinRequest sent data in FLoRa).
+        void sendUnConfData();
 
         int numberOfPacketsToSend;
         int sentPackets;
         int receivedADRCommands;
+        int receivedPackets;   // AFLoRa: every downlink delivered to the app
         int lastSentMeasurement;
         simtime_t timeToFirstPacket;
         simtime_t timeToNextPacket;
@@ -62,28 +65,9 @@ class SimpleLoRaApp : public cSimpleModule, public ILifecycle
         cOutVector sfVector;
         cOutVector tpVector;
 
-        //LoRa parameters control
-        LoRaRadio *loRaRadio;
-
-        void setSF(int SF);
-        int getSF();
-        void setTP(int TP);
-        double getTP();
-        void setCR(int CR);
-        int getCR();
-        void setCF(units::values::Hz CF);
-        units::values::Hz getCF();
-        void setBW(units::values::Hz BW);
-        units::values::Hz getBW();
-
-
-        //variables to control ADR
-        bool evaluateADRinNode;
-        int ADR_ACK_CNT = 0;
-        int ADR_ACK_LIMIT = 64; //64;
-        int ADR_ACK_DELAY = 32; //32;
-        bool sendNextPacketWithADRACKReq = false;
-        void increaseSFIfPossible();
+        // AFLoRa: the MAC controls the radio parameters and the device side of ADR; the app only
+        // reads them for its statistics.
+        LoRaMac *loRaMac = nullptr;
 
     public:
         SimpleLoRaApp() {}

@@ -306,9 +306,8 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
     pkt->trimFront();
     auto frame = pkt->removeAtFront<LoRaMacFrame>();
 
-    const auto & rcvAppPacket = pkt->peekAtFront<LoRaAppPacket>();
-
-    if(rcvAppPacket->getOptions().getADRACKReq())
+    // AFLoRa: ADRACKReq is a frame-control bit of the uplink MAC frame.
+    if(frame->getADRACKReq())
     {
         sendADRAckRep = true;
     }
@@ -355,6 +354,14 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
         auto mgmtPacket = makeShared<LoRaAppPacket>();
         mgmtPacket->setMsgType(TXCONFIG);
 
+        // AFLoRa: an unconfirmed downlink with the ADR bit set; a LinkADRReq goes in the frame
+        // options (FOpts), not in the application packet.
+        auto frameToSend = makeShared<LoRaMacFrame>();
+        frameToSend->setChunkLength(B(par("headerLength").intValue()));
+        frameToSend->setMType(UCONF_DATA_DW);
+        frameToSend->setFOpsLen(NO_OPTIONS);
+        frameToSend->setADR(true);
+
         if(sendADR)
         {
             double SNRmargin;
@@ -396,20 +403,19 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
             }
             if(calculatedPowerdBm > 14) calculatedPowerdBm = 14;
 
+            newOptions.setCid(LINK_ADR_REQ_ID);
             newOptions.setLoRaSF(calculatedSF);
             newOptions.setLoRaTP(calculatedPowerdBm);
             EV << calculatedSF << endl;
             EV << calculatedPowerdBm << endl;
-            mgmtPacket->setOptions(newOptions);
+            frameToSend->setOptions(newOptions);
+            frameToSend->setFOpsLen(LINK_ADR_REQ_LEN);
         }
 
         if(simTime() >= getSimulation()->getWarmupPeriod() && sendADR == true)
         {
             knownNodes[nodeIndex].numberOfSentADRPackets++;
         }
-
-        auto frameToSend = makeShared<LoRaMacFrame>();
-        frameToSend->setChunkLength(B(par("headerLength").intValue()));
 
       //  LoRaMacFrame *frameToSend = new LoRaMacFrame("ADRPacket");
 
