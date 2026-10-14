@@ -44,6 +44,7 @@ void LoRaTransmitter::initialize(int stage)
         {
             iAmGateway = true;
         } else iAmGateway = false;
+        afloraAirtime = strcmp(par("airtimeFormula").stringValue(), "aflora") == 0;
     }
 }
 
@@ -70,11 +71,26 @@ const ITransmission *LoRaTransmitter::createTransmission(const IRadio *transmitt
     int payloadBytes = 0;
     if(iAmGateway) payloadBytes = 15;
     else payloadBytes = 20;
-    int payloadSymbNb = 8;
-    payloadSymbNb += std::ceil((8*payloadBytes - 4*frame->getSpreadFactor() + 28 + 16 - 20*0)/(4*(frame->getSpreadFactor()-2*0)))*(frame->getCodeRendundance() + 4);
-    if(payloadSymbNb < 8) payloadSymbNb = 8;
-    simtime_t Theader = 0.5 * (8+payloadSymbNb) * Tsym / 1000;
-    simtime_t Tpayload = 0.5 * (8+payloadSymbNb) * Tsym / 1000;
+    simtime_t Theader;
+    simtime_t Tpayload;
+    if (afloraAirtime) {
+        // AFLoRa: Semtech formula with low data rate optimisation at SF11 and SF12
+        int lSF = frame->getSpreadFactor();
+        int lCR = frame->getCodeRendundance();
+        int lH = 0;                               // explicit physical header
+        int lDe = (lSF == 11 || lSF == 12) ? 1 : 0;
+        double mc = std::ceil((8.0*payloadBytes - 4*lSF + 28 + 16 - 20*lH)/(4*(lSF-2*lDe)));
+        int payloadSymbNb = 8 + std::max(mc*(lCR + 4), 0.0);
+        Theader = 0.5 * payloadSymbNb * Tsym / 1000;
+        Tpayload = 0.5 * payloadSymbNb * Tsym / 1000;
+    }
+    else {
+        int payloadSymbNb = 8;
+        payloadSymbNb += std::ceil((8*payloadBytes - 4*frame->getSpreadFactor() + 28 + 16 - 20*0)/(4*(frame->getSpreadFactor()-2*0)))*(frame->getCodeRendundance() + 4);
+        if(payloadSymbNb < 8) payloadSymbNb = 8;
+        Theader = 0.5 * (8+payloadSymbNb) * Tsym / 1000;
+        Tpayload = 0.5 * (8+payloadSymbNb) * Tsym / 1000;
+    }
 
     const simtime_t duration = Tpreamble + Theader + Tpayload;
     const simtime_t endTime = startTime + duration;

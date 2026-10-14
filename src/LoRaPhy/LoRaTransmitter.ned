@@ -23,5 +23,11 @@ module LoRaTransmitter extends NarrowbandTransmitterBase
         @signal[LoRaTransmissionCreated](type=bool); // optional
         @statistic[LoRaTransmissionCreated](source=LoRaTransmissionCreated; record=count);
         modulation = default("LoRaModulation");
+        // Airtime of a frame (20 B from a device, 15 B from a gateway, in both formulas).
+        // "flora": FLoRa's formula, integer division before ceil(), no low data rate
+        // optimisation, and 8 payload symbols counted twice. "aflora": AFLoRa's correction, the
+        // Semtech formula (real ceil(), low data rate optimisation at SF11-12, CRC on, explicit
+        // header).
+        string airtimeFormula @enum("flora", "aflora") = default("flora");
         @class(LoRaTransmitter);
 }
