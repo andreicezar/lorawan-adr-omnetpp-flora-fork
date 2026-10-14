@@ -673,7 +673,7 @@ bool LoRaMac::isReceiving()
 
 bool LoRaMac::isAck(const Ptr<const LoRaMacFrame> &frame)
 {
-    return false;//dynamic_cast<LoRaMacFrame *>(frame);
+    return frame->getACK();   // AFLoRa (FLoRa returned false)
 }
 
 bool LoRaMac::isBroadcast(const Ptr<const LoRaMacFrame> &frame)
