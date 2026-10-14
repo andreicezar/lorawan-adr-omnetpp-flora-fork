@@ -40,6 +40,7 @@ void LoRaGWMac::initialize(int stage)
         const char *addressString = par("address");
         GW_forwardedDown = 0;
         GW_droppedDC = 0;
+        afloraDutyCycleTable = strcmp(par("dutyCycleTable").stringValue(), "aflora") == 0;
         if (!strcmp(addressString, "auto")) {
             // assign automatic address
             address = MacAddress::generateAutoAddress();
@@ -120,9 +121,9 @@ void LoRaGWMac::handleUpperMessage(cMessage *msg)
         waitingForDC = true;
         double delta;
         if(frame->getLoRaSF() == 7) delta = 0.61696;
-        if(frame->getLoRaSF() == 8) delta = 1.23392;
+        if(frame->getLoRaSF() == 8) delta = afloraDutyCycleTable ? 1.07008 : 1.23392;
         if(frame->getLoRaSF() == 9) delta = 2.14016;
-        if(frame->getLoRaSF() == 10) delta = 4.28032;
+        if(frame->getLoRaSF() == 10) delta = afloraDutyCycleTable ? 3.62496 : 4.28032;
         if(frame->getLoRaSF() == 11) delta = 7.24992;
         if(frame->getLoRaSF() == 12) delta = 14.49984;
         scheduleAt(simTime() + delta, dutyCycleTimer);

@@ -40,6 +40,10 @@ simple LoRaGWMac extends MacProtocolBase like IMacProtocol
         int cwMax = default(1023); // maximum contention window
         int cwMulticast = default(cwMin); // multicast contention window
         int retryLimit = default(7); // maximum number of retries
+        // Downlink duty cycle: after a downlink the gateway drops the next ones for 10 times the
+        // airtime of a 15 B frame. "flora": FLoRa's table; "aflora": AFLoRa's, which corrects
+        // SF8 (1.23392 s -> 1.07008 s) and SF10 (4.28032 s -> 3.62496 s).
+        string dutyCycleTable @enum("flora", "aflora") = default("flora");
         @class(LoRaGWMac);
 
     gates:

@@ -47,6 +47,7 @@ public:
     virtual void configureNetworkInterface() override;
     long GW_forwardedDown;
     long GW_droppedDC;
+    bool afloraDutyCycleTable = false;   // dutyCycleTable == "aflora"
 
     virtual void handleUpperMessage(cMessage *msg) override;
     virtual void handleLowerMessage(cMessage *msg) override;
