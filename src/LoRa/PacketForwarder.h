@@ -53,6 +53,9 @@ class PacketForwarder : public cSimpleModule, public cListener
       simsignal_t LoRa_GWPacketReceived;
       int counterOfSentPacketsFromNodes = 0;
       int counterOfReceivedPackets = 0;
+      // AFLoRa: frames sent by the devices (retransmissions included), for a per-frame DER
+      int counterOfSentMacFramesFromNodes = 0;
+      simsignal_t loRaMacFrameSentSignal = -1;
 };
 } //namespace inet
 #endif

@@ -37,6 +37,9 @@ void PacketForwarder::initialize(int stage)
     } else if (stage == INITSTAGE_APPLICATION_LAYER) {
         startUDP();
         getSimulation()->getSystemModule()->subscribe("LoRa_AppPacketSent", this);
+        // AFLoRa: also count the frames the devices send
+        loRaMacFrameSentSignal = registerSignal("LoRa_MacFrameSent");
+        getSimulation()->getSystemModule()->subscribe(loRaMacFrameSentSignal, this);
     }
 }
 
@@ -158,13 +161,26 @@ void PacketForwarder::sendPacket()
 
 void PacketForwarder::receiveSignal(cComponent *source, simsignal_t signalID, intval_t value, cObject *details)
 {
-    if (simTime() >= getSimulation()->getWarmupPeriod())
-        counterOfSentPacketsFromNodes++;
+    if (simTime() >= getSimulation()->getWarmupPeriod()) {
+        if (signalID == loRaMacFrameSentSignal)
+            counterOfSentMacFramesFromNodes++;
+        else
+            counterOfSentPacketsFromNodes++;
+    }
 }
 
 void PacketForwarder::finish()
 {
     recordScalar("LoRa_GW_DER", double(counterOfReceivedPackets)/counterOfSentPacketsFromNodes);
+    // AFLoRa: received frames, DER per transmitted frame and packets sent by the devices.
+    // (AFLoRa compared the signal name with "LoRA_AppPacketSent", so its
+    // LoRa_GW_CountPacketsNodes stayed 0; here it counts the packets.)
+    recordScalar("LoRa_GW_Frw_FramesRcvd", double(counterOfReceivedPackets));
+    if (counterOfSentMacFramesFromNodes > 0)
+        recordScalar("LoRa_GW_DER_MAC", double(counterOfReceivedPackets)/counterOfSentMacFramesFromNodes);
+    else
+        recordScalar("LoRa_GW_DER_MAC", 0);
+    recordScalar("LoRa_GW_CountPacketsNodes", double(counterOfSentPacketsFromNodes));
 }
 
 

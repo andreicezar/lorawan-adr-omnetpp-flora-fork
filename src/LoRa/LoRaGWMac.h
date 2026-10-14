@@ -48,6 +48,11 @@ public:
     long GW_forwardedDown;
     long GW_droppedDC;
     bool afloraDutyCycleTable = false;   // dutyCycleTable == "aflora"
+    // AFLoRa: SF and TX power of the last downlink, and one sample per downlink dropped by the
+    // duty cycle
+    int GW_presentSF = 0;
+    double GW_presentTP = 0;
+    cOutVector cGW_droppedDCVector;
 
     virtual void handleUpperMessage(cMessage *msg) override;
     virtual void handleLowerMessage(cMessage *msg) override;

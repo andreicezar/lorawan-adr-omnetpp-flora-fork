@@ -71,6 +71,9 @@ private:
     //statistics
     long numCollisions;
     long rcvBelowSensitivity;
+    // AFLoRa: one sample per collision and per reception below sensitivity
+    cOutVector cLoRaCollisions;
+    cOutVector cRcvBelowSensitivity;
 
 public:
   LoRaReceiver();

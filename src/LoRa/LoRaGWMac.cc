@@ -41,6 +41,11 @@ void LoRaGWMac::initialize(int stage)
         GW_forwardedDown = 0;
         GW_droppedDC = 0;
         afloraDutyCycleTable = strcmp(par("dutyCycleTable").stringValue(), "aflora") == 0;
+        GW_presentSF = 0;
+        GW_presentTP = 0;
+        cGW_droppedDCVector.setName("GW Dropped DC");
+        WATCH(GW_presentSF);
+        WATCH(GW_presentTP);
         if (!strcmp(addressString, "auto")) {
             // assign automatic address
             address = MacAddress::generateAutoAddress();
@@ -111,6 +116,8 @@ void LoRaGWMac::handleUpperMessage(cMessage *msg)
 
         auto tag = pkt->addTagIfAbsent<MacAddressReq>();
         tag->setDestAddress(frame->getReceiverAddress());
+        GW_presentSF = frame->getLoRaSF();
+        GW_presentTP = frame->getLoRaTP();
 //        LoRaMacControlInfo *ctrl = new LoRaMacControlInfo();
 //        ctrl->setSrc(address);
 //        ctrl->setDest(frame->getReceiverAddress());
@@ -134,6 +141,7 @@ void LoRaGWMac::handleUpperMessage(cMessage *msg)
     else
     {
         GW_droppedDC++;
+        cGW_droppedDCVector.record(1);
         delete msg;
     }
 }

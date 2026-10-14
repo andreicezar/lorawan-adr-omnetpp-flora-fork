@@ -44,6 +44,8 @@ void LoRaReceiver::initialize(int stage)
         LoRaReceptionCollision = registerSignal("LoRaReceptionCollision");
         numCollisions = 0;
         rcvBelowSensitivity = 0;
+        cLoRaCollisions.setName("LoRa Collisions");
+        cRcvBelowSensitivity.setName("Received Below Sensitivity");
     }
 }
 
@@ -82,6 +84,7 @@ bool LoRaReceiver::computeIsReceptionPossible(const IListening *listening, const
         EV_DEBUG << "Computing whether reception is possible: minimum reception power = " << minReceptionPower << ", sensitivity = " << sensitivity << " -> reception is " << (isReceptionPossible ? "possible" : "impossible") << endl;
         if(isReceptionPossible == false) {
            const_cast<LoRaReceiver* >(this)->rcvBelowSensitivity++;
+           const_cast<LoRaReceiver* >(this)->cRcvBelowSensitivity.record(1);
         }
         return isReceptionPossible;
     }
@@ -105,6 +108,7 @@ bool LoRaReceiver::computeIsReceptionAttempted(const IListening *listening, cons
             auto *macLayer = check_and_cast<LoRaMac *>(getParentModule()->getParentModule()->getSubmodule("mac"));
             if (rec == macLayer->getAddress()) {
                 const_cast<LoRaReceiver* >(this)->numCollisions++;
+                const_cast<LoRaReceiver* >(this)->cLoRaCollisions.record(1);
             }
             //EV << "Node: Extracted macFrame = " << loraMacFrame->getReceiverAddress() << ", node address = " << macLayer->getAddress() << std::endl;
         } else {
@@ -112,6 +116,7 @@ bool LoRaReceiver::computeIsReceptionAttempted(const IListening *listening, cons
             EV << "GW: Extracted macFrame = " << rec << ", node address = " << gwMacLayer->getAddress() << std::endl;
             if (rec == MacAddress::BROADCAST_ADDRESS) {
                 const_cast<LoRaReceiver* >(this)->numCollisions++;
+                const_cast<LoRaReceiver* >(this)->cLoRaCollisions.record(1);
             }
         }
         return false;
