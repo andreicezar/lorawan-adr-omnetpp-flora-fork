@@ -106,7 +106,9 @@ const ITransmission *LoRaTransmitter::createTransmission(const IRadio *transmitt
         transmissionPower = mW(math::dBmW2mW(radio->loRaTP));
     }
     else
-        transmissionPower = mW(math::dBmW2mW(14));
+        // AFLoRa: a gateway sends at the power the network server put in the frame
+        // (NetworkServerApp.initialLoRaTP, 14 dBm by default, FLoRa's fixed value).
+        transmissionPower = frame->getPower();
 
     EV << "[MSDebug] I am sending packet with TP: " << transmissionPower << endl;
     EV << "[MSDebug] I am sending packet with SF: " << frame->getSpreadFactor() << endl;
