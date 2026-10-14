@@ -41,6 +41,7 @@ LoRaMac::~LoRaMac()
     cancelAndDelete(endListening_2);
     cancelAndDelete(mediumStateChange);
     cancelAndDelete(retransmission);
+    cancelAndDelete(endDCTimeOff);
 }
 
 /****************************************************************
@@ -109,6 +110,11 @@ void LoRaMac::initialize(int stage)
             throw cRuntimeError("Unknown sfModePar '%s' (SFM0, SFM1, SFM2 or SFM3)", sfModePar.c_str());
         LoRa_MacFrameSent = registerSignal("LoRa_MacFrameSent");
 
+        // AFLoRa: end-device duty cycle and MAC queue
+        dutyCycleEnabled = par("dutyCycleEnabled");
+        dcTimeOff = false;
+        maxQueueSize = par("maxQueueSize");
+
         // initialize self messages
         endTransmission = new cMessage("Transmission");
         endReception = new cMessage("Reception");
@@ -119,9 +125,14 @@ void LoRaMac::initialize(int stage)
         endListening_2 = new cMessage("Listening_2");
         mediumStateChange = new cMessage("MediumStateChange");
         retransmission = new cMessage("Retransmission");
+        endDCTimeOff = new cMessage("EndDCTimeOff");
 
         // set up internal queue
         txQueue = getQueue(gate(upperLayerInGateId));//check_and_cast<queueing::IPacketQueue *>(getSubmodule("queue"));
+        // AFLoRa: the MAC takes every packet from txQueue into its own queue, which counts the
+        // frame in flight (FLoRa pulled a packet only when idle; with maxQueueSize = -1 and the
+        // duty cycle off the order and timing are the same).
+        transmissionQueue.setName("transmissionQueue");
 
         // state variables
         fsm.setName("LoRaMac State Machine");
@@ -147,6 +158,8 @@ void LoRaMac::initialize(int stage)
         numAckReceived = 0;
         numAckSent = 0;
         numAckNotReceived = 0;
+        numDroppedUpPackets = 0;
+        nodeDroppedDC.setName("Node Dropped DC");
         sfSentCount.setName("SF node count");
         tpSentCount.setName("TP tx frame");
         reqSendPkConfd.setName("Req send con pk");
@@ -194,6 +207,8 @@ void LoRaMac::finish()
     recordScalar("numAckReceived", numAckReceived);
     recordScalar("numAckSent", numAckSent);
     recordScalar("numAckNotReceived", numAckNotReceived);
+    recordScalar("numDroppedUpPackets", numDroppedUpPackets);
+    recordScalar("numPckTxPending", getQueueLength() > 0 ? 1 : 0);
 }
 
 void LoRaMac::configureNetworkInterface()
@@ -218,8 +233,18 @@ void LoRaMac::configureNetworkInterface()
 void LoRaMac::handleSelfMessage(cMessage *msg)
 {
     EV << "received self message: " << msg << endl;
-    if (msg == retransmission)
-        retry = true;   // AFLoRa: the frame waiting for its ACK may go again
+    // AFLoRa: end of the duty-cycle off-time, or the retry timer of the frame waiting for its
+    // ACK; either may let the next frame go (AFLoRa's Idle-Transmit-Pending transition).
+    if (msg == endDCTimeOff) {
+        dcTimeOff = false;
+        startNextTransmission();
+        return;
+    }
+    if (msg == retransmission) {
+        retry = true;
+        startNextTransmission();
+        return;
+    }
     handleWithFsm(msg);
 }
 #if 0
@@ -249,9 +274,6 @@ void LoRaMac::handleUpperPacket(cMessage *msg)
 #endif
 void LoRaMac::handleUpperPacket(Packet *packet)
 {
-    if(fsm.getState() != IDLE) {
-         error("Wrong, it should not happen erroneous state: %s", fsm.getStateName());
-    }
     packet->addTagIfAbsent<PacketProtocolTag>()->setProtocol(&Protocol::apskPhy);
 
     EV << "frame " << packet << " received from higher layer " << endl;
@@ -264,15 +286,23 @@ void LoRaMac::handleUpperPacket(Packet *packet)
         if (mType == UCONF_DATA_UP)
             reqSendPkUnConfd.record(1);
     }
+    // AFLoRa: a packet arriving when the MAC queue is full is dropped.
+    if (maxQueueSize >= 0 && getQueueLength() >= maxQueueSize) {
+        if (simTime() >= getSimulation()->getWarmupPeriod()) {
+            numDroppedUpPackets++;
+            nodeDroppedDC.record(1);
+        }
+        EV << "Dropped Up frame. Transmission Queue is full \n";
+        delete packet;
+        return;
+    }
     auto pktEncap = encapsulate(packet);
     const auto &frame = pktEncap->peekAtFront<LoRaMacFrame>();
     if (frame == nullptr)
         throw cRuntimeError("Header LoRaMacFrame not found");
 
-    if (currentTxFrame != nullptr)
-        throw cRuntimeError("Model error: incomplete transmission exists");
-    currentTxFrame = pktEncap;
-    handleWithFsm(currentTxFrame);
+    transmissionQueue.insert(pktEncap);
+    startNextTransmission();
 }
 
 
@@ -296,10 +326,9 @@ queueing::IPassivePacketSource *LoRaMac::getProvider(const cGate *gate)
 void LoRaMac::handleCanPullPacketChanged(const cGate *gate)
 {
     Enter_Method("handleCanPullPacketChanged");
-    // AFLoRa: a frame waiting for its ACK keeps the MAC busy; new packets wait in the queue.
-    if (fsm.getState() == IDLE && !txQueue->isEmpty() && currentTxFrame == nullptr && !isTxDeferred()) {
+    // AFLoRa: every packet goes into the MAC's own queue at once.
+    while (!txQueue->isEmpty())
         processUpperPacket();
-    }
 }
 
 void LoRaMac::handlePullPacketProcessed(Packet *packet, const cGate *gate, bool successful)
@@ -324,11 +353,6 @@ void LoRaMac::handleWithFsm(cMessage *msg)
             FSMA_Enter(FSMA_Delay_Action(turnOffReceiver()));
             FSMA_Event_Transition(Idle-Transmit,
                                   isUpperMessage(msg) && !isTxDeferred(),
-                                  TRANSMIT,
-            );
-            // AFLoRa: the frame waiting for its ACK goes again when the retry timer fires.
-            FSMA_Event_Transition(Idle-Transmit-Pending,
-                                  msg == retransmission && currentTxFrame != nullptr && !isTxDeferred(),
                                   TRANSMIT,
             );
         }
@@ -438,17 +462,13 @@ void LoRaMac::handleWithFsm(cMessage *msg)
 //        }
 //    }
 
-    // AFLoRa: nothing starts while the MAC defers transmissions (a frame waiting for its retry).
+    // Back in IDLE: the next frame goes unless the MAC defers transmissions (AFLoRa: waiting for
+    // a retry or for the end of the duty-cycle off-time).
     if (fsm.getState() == IDLE) {
         if (isReceiving())
             handleWithFsm(mediumStateChange);
-        else if (currentTxFrame != nullptr) {
-            if (!isTxDeferred())
-                handleWithFsm(currentTxFrame);
-        }
-        else if (!txQueue->isEmpty() && !isTxDeferred()) {
-            processUpperPacket();
-        }
+        else
+            startNextTransmission();
     }
 
     if (endSifs) {
@@ -578,6 +598,14 @@ void LoRaMac::sendDataFrame(Packet *frameToSend)
     macAddressInd->setDestAddress(macHeader->getReceiverAddress());
 
     //frameCopy->addTag<PacketProtocolTag>()->setProtocol(&Protocol::lora);
+
+    // AFLoRa: duty-cycle off-time, counted from the start of the frame
+    if (dutyCycleEnabled) {
+        dcTimeOff = true;
+        if (endDCTimeOff->isScheduled())
+            cancelEvent(endDCTimeOff);
+        scheduleAt(simTime() + getTimeOff(), endDCTimeOff);
+    }
 
     // AFLoRa statistics
     sfSentCount.record(getPresentSF());
@@ -772,10 +800,31 @@ void LoRaMac::increaseSFIfPossible()
 
 bool LoRaMac::isTxDeferred() const
 {
-    // AFLoRa txDeferred: a frame waiting for its ACK goes again only once the retry timer fired.
+    // AFLoRa txDeferred: a frame waiting for its ACK goes again once the retry timer fired and
+    // the duty-cycle off-time is over; otherwise only the off-time defers.
     if (ACKPending)
-        return !retry;
-    return false;
+        return !(retry && !dcTimeOff);
+    return dcTimeOff;
+}
+
+void LoRaMac::startNextTransmission()
+{
+    if (fsm.getState() != IDLE || isTxDeferred())
+        return;
+    if (currentTxFrame == nullptr) {
+        if (transmissionQueue.isEmpty())
+            return;
+        currentTxFrame = check_and_cast<Packet *>(transmissionQueue.pop());
+    }
+    // Idle-Transmit needs a frame from the upper layer; anything else would bring us back here.
+    if (!isUpperMessage(currentTxFrame))
+        throw cRuntimeError("Model error: queued frame did not arrive from the upper layer");
+    handleWithFsm(currentTxFrame);
+}
+
+int LoRaMac::getQueueLength() const
+{
+    return transmissionQueue.getLength() + (currentTxFrame != nullptr ? 1 : 0);
 }
 
 void LoRaMac::setCurrentTxFrameSF(int sf)
@@ -815,14 +864,16 @@ int LoRaMac::getPresentCR()
 
 double LoRaMac::getTimeOff()
 {
-    // 1% duty cycle for 20 B at CR 4/8: the shortest spacing SimpleLoRaApp accepts between two
-    // packets (values as in FLoRa's SimpleLoRaApp).
+    // 1% duty cycle for 20 B at CR 4/8 (100 times the airtime): the duty-cycle off-time and the
+    // shortest spacing SimpleLoRaApp accepts between two packets. FLoRa's SimpleLoRaApp table
+    // had 85.6064 s at SF11 (no low data rate optimisation); AFLoRa's MAC uses 98.7136 s. The
+    // AFLoRa value applies when the device duty cycle is on.
     switch (loRaRadio->loRaSF) {
         case 7: return 7.808;
         case 8: return 13.9776;
         case 9: return 24.6784;
         case 10: return 49.3568;
-        case 11: return 85.6064;
+        case 11: return dutyCycleEnabled ? 98.7136 : 85.6064;
         case 12: return 171.2128;
         default: return 0;
     }

@@ -68,6 +68,8 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     // sent again after a random 1..3 s, up to maxRetry transmissions in all.
     bool ACKPending = false;
     bool retry = false;          // the retransmission timer has fired
+    bool dutyCycleEnabled = false;   // AFLoRa: end-device duty cycle
+    bool dcTimeOff = false;          // duty-cycle off-time running
     int maxRetry = 8;
     int countRetry = 0;
     simtime_t acktimeoutTime = -1;
@@ -157,6 +159,9 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
 
     /** AFLoRa: end of the ACK timeout, retransmission of a confirmed uplink */
     cMessage *retransmission = nullptr;
+
+    /** AFLoRa: end of the duty-cycle off-time */
+    cMessage *endDCTimeOff = nullptr;
     //@}
 
     /** @name Statistics */
@@ -177,6 +182,8 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     long numAckReceived;
     long numAckSent;
     long numAckNotReceived;
+    long numDroppedUpPackets;      // packets dropped because the MAC queue was full
+    cOutVector nodeDroppedDC;      // one sample per packet dropped that way
     cOutVector sfSentCount;        // SF of every transmitted frame
     cOutVector tpSentCount;        // TX power of every transmitted frame
     cOutVector reqSendPkConfd;     // confirmed packets the app asked to send
@@ -273,6 +280,10 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     virtual bool isTxDeferred() const;
     /** Sets the SF of the frame waiting for its ACK (header and tag). */
     virtual void setCurrentTxFrameSF(int sf);
+    /** Starts the next frame (a pending retry first, then the queue) if the MAC may transmit. */
+    virtual void startNextTransmission();
+    /** Frames in the MAC: the queue plus the one in flight or waiting for its ACK. */
+    virtual int getQueueLength() const;
     //@}
 };
 

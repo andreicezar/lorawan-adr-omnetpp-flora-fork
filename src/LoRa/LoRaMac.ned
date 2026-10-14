@@ -44,6 +44,16 @@ module LoRaMac extends CsmaCaMac
         // per ACK.
         int maxRetry = default(8);
         string sfModePar = default("SFM0");
+
+        // AFLoRa: end-device duty cycle (always on in AFLoRa, absent in FLoRa). After each frame
+        // the MAC waits getTimeOff() before sending again: 1% of the airtime of a 20 B frame at
+        // CR 4/8, counted from the start of the frame. While it is on, SimpleLoRaApp also spaces
+        // its packets with AFLoRa's values (85.6 s became 98.7 s at SF11).
+        bool dutyCycleEnabled = default(false);
+        // AFLoRa: frames waiting in the MAC, the one in flight included. A packet that arrives
+        // when the queue is full is dropped (numDroppedUpPackets). -1 = no limit (AFLoRa and
+        // FLoRa default).
+        int maxQueueSize = default(-1);
     gates:
         input upperMgmtIn;
         output upperMgmtOut;
