@@ -279,7 +279,7 @@ void NetworkServerApp::addPktToProcessingTable(Packet* pkt)
         const auto& networkHeader = getNetworkProtocolHeader(pkt);
         const L3Address& gwAddress = networkHeader->getSourceAddress();
         rcvPkt.possibleGateways.emplace_back(gwAddress, math::fraction2dB(frame->getSNIR()), frame->getRSSI());
-        scheduleAt(simTime() + 1.2, rcvPkt.endOfWaiting);
+        scheduleAt(simTime() + par("gatewayWaitTime").doubleValue(), rcvPkt.endOfWaiting);
         receivedPackets.push_back(rcvPkt);
     }
 }

@@ -27,6 +27,11 @@ simple NetworkServerApp like IApp
     int headerLength @unit(B) = default(8B);
     // AFLoRa: TX power of the downlinks (ADR commands and ACKs); FLoRa used a fixed 14 dBm.
     double initialLoRaTP @unit(dBm) = default(14dBm);
+    // How long the server collects the copies of an uplink from the gateways before it
+    // processes it and answers; the answer leaves at once, so it must start inside the device's
+    // RX1 window (LoRaMac.receiveDelay1/receiveWindow1). FLoRa: 1.2 s; AFLoRa: 1.002 s, for its
+    // 0.2 s windows.
+    double gatewayWaitTime @unit(s) = default(1.2s);
 
     string adrMethod = default("max");
     double adrDeviceMargin = default(15);

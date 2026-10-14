@@ -59,10 +59,14 @@ void LoRaMac::initialize(int stage)
         ackTimeout = par("ackTimeout");
         retryLimit = par("retryLimit");
 
-        waitDelay1Time = 1;
-        listening1Time = 1;
-        waitDelay2Time = 1;
-        listening2Time = 1;
+        // Receive windows (FLoRa: 1 s + 1 s, then 1 s + 1 s; AFLoRa: RX1 at 1 s and RX2 at 2 s,
+        // 0.2 s each). waitDelay2Time is the gap between the end of RX1 and the start of RX2.
+        waitDelay1Time = par("receiveDelay1");
+        listening1Time = par("receiveWindow1");
+        waitDelay2Time = par("receiveDelay2").doubleValue() - par("receiveDelay1").doubleValue() - par("receiveWindow1").doubleValue();
+        listening2Time = par("receiveWindow2");
+        if (waitDelay2Time < 0)
+            throw cRuntimeError("receiveDelay2 must not start before RX1 ends (receiveDelay1 + receiveWindow1)");
 
         const char *addressString = par("address");
         if (!strcmp(addressString, "auto")) {

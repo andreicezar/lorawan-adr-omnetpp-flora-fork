@@ -54,6 +54,16 @@ module LoRaMac extends CsmaCaMac
         // when the queue is full is dropped (numDroppedUpPackets). -1 = no limit (AFLoRa and
         // FLoRa default).
         int maxQueueSize = default(-1);
+
+        // Receive windows, measured from the end of the uplink. FLoRa: RX1 listens from 1 s to
+        // 2 s and RX2 from 3 s to 4 s. AFLoRa: RX1 from 1 s and RX2 from 2 s (RECEIVE_DELAY2 of
+        // LoRaWAN), 0.2 s each. A window only has to contain the start of a downlink; the
+        // reception then runs to its end. Use together with NetworkServerApp.gatewayWaitTime,
+        // which decides when the answer leaves.
+        double receiveDelay1 @unit(s) = default(1s);
+        double receiveWindow1 @unit(s) = default(1s);
+        double receiveDelay2 @unit(s) = default(3s);
+        double receiveWindow2 @unit(s) = default(1s);
     gates:
         input upperMgmtIn;
         output upperMgmtOut;
