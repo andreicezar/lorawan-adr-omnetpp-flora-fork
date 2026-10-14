@@ -63,6 +63,23 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     int ADR_ACK_DELAY = 32;
     bool sendNextPacketWithADRACKReq = false;
     int sequenceNumberRemote = 0;
+
+    // AFLoRa: confirmed uplinks. The frame waiting for its ACK stays in currentTxFrame and is
+    // sent again after a random 1..3 s, up to maxRetry transmissions in all.
+    bool ACKPending = false;
+    bool retry = false;          // the retransmission timer has fired
+    int maxRetry = 8;
+    int countRetry = 0;
+    simtime_t acktimeoutTime = -1;
+    // AFLoRa: SF management on retransmissions of confirmed uplinks
+    enum SFModes {
+        SFM0,   // SF as defined in the LoRaWAN specification: one step up every two retries
+        SFM1,   // SF unchanged
+        SFM2,   // circular: SF7 -> ... -> SF12 -> SF7 -> ...
+        SFM3,   // one step up every two retries, one step down when an ACK arrives
+    };
+    SFModes sfMode = SFM0;
+    std::string sfModePar;
     //@}
 
     /** End of the Short Inter-Frame Time period */
@@ -137,6 +154,9 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
 
     /** Radio state change self message. Currently this is optimized away and sent directly */
     cMessage *mediumStateChange = nullptr;
+
+    /** AFLoRa: end of the ACK timeout, retransmission of a confirmed uplink */
+    cMessage *retransmission = nullptr;
     //@}
 
     /** @name Statistics */
@@ -150,6 +170,19 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     long numSentBroadcast;
     long numReceivedBroadcast;
     long numADRCommandReceived;   // AFLoRa
+    // AFLoRa
+    long numAckReceivedNoRetry;
+    long numSentConFrames;
+    long numSentUnconFrames;
+    long numAckReceived;
+    long numAckSent;
+    long numAckNotReceived;
+    cOutVector sfSentCount;        // SF of every transmitted frame
+    cOutVector tpSentCount;        // TX power of every transmitted frame
+    cOutVector reqSendPkConfd;     // confirmed packets the app asked to send
+    cOutVector reqSendPkUnConfd;   // unconfirmed packets the app asked to send
+    cOutVector rcvdAckPk;          // ACKs received
+    simsignal_t LoRa_MacFrameSent;
     //@}
 
   public:
@@ -233,9 +266,13 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     // AFLoRa
     /** Downlink for this device: frame control and MAC commands (LinkADRReq). */
     virtual void manageFrame(const Ptr<const LoRaMacFrame> &frame);
-    /** RX2 closed without a downlink: ADRACKReq counter and ADR backoff. */
+    /** RX2 closed without a downlink: retransmission of a confirmed uplink, ADRACKReq counter and ADR backoff. */
     virtual void setRetransmission();
     virtual void increaseSFIfPossible();
+    /** True while the MAC must not start a transmission (AFLoRa txDeferred). */
+    virtual bool isTxDeferred() const;
+    /** Sets the SF of the frame waiting for its ACK (header and tag). */
+    virtual void setCurrentTxFrameSF(int sf);
     //@}
 };
 

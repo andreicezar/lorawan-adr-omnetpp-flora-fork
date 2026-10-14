@@ -40,6 +40,9 @@ public:
     int lastSeqNoProcessed;
     int numberOfSentADRPackets;
     std::list<double> adrListSNIR;
+    // AFLoRa
+    int lastSeqProcessed;    // last sequence number counted as a new packet
+    int lastSentSeqNumber;   // downlink frame counter
     cOutVector *historyAllSNIR;
     cOutVector *historyAllRSSI;
     cOutVector *receivedSeqNumber;
@@ -77,6 +80,16 @@ class NetworkServerApp : public cSimpleModule, cListener
     std::string adrMethod;
     double adrDeviceMargin;
     std::map<int, int> numReceivedPerNode;
+    // AFLoRa
+    int totalReceivedFrames1GW = 0;   // frames that passed the duplicate filter (every gateway copy)
+    int totalRcvdConfFrames1GW = 0;
+    int totalRcvdUnconfFrames1GW = 0;
+    cOutVector rcvdPkConfd;      // confirmed packets received (new ones)
+    cOutVector rcvdPkUnConfd;    // unconfirmed packets received (new ones)
+    cOutVector rcvdFrConfd;      // confirmed frames received
+    cOutVector rcvdFrUnConfd;    // unconfirmed frames received
+    double iniTP = 14;           // dBm
+    double TPnow = 14;           // dBm, TX power of the downlinks
 
   protected:
     virtual void initialize(int stage) override;
@@ -91,6 +104,10 @@ class NetworkServerApp : public cSimpleModule, cListener
     void addPktToProcessingTable(Packet* pkt);
     void processScheduledPacket(cMessage* selfMsg);
     void evaluateADR(Packet *pkt, L3Address pickedGateway, double SNIRinGW, double RSSIinGW);
+    // AFLoRa
+    bool isPacketNew(const Ptr<const LoRaMacFrame> &frame);
+    void ackmentPacket(Packet *pkt, L3Address pickedGateway, double SNIRinGW, double RSSIinGW);
+    void unConfPacket(Packet *pkt, L3Address pickedGateway, double SNIRinGW, double RSSIinGW);
     void receiveSignal(cComponent *source, simsignal_t signalID, intval_t value, cObject *details) override;
     bool evaluateADRinServer;
 

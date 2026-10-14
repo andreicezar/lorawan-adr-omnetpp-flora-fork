@@ -25,6 +25,8 @@ simple NetworkServerApp like IApp
     int destPort = default(-1);
     bool evaluateADRinServer = default(false);
     int headerLength @unit(B) = default(8B);
+    // AFLoRa: TX power of the downlinks (ADR commands and ACKs); FLoRa used a fixed 14 dBm.
+    double initialLoRaTP @unit(dBm) = default(14dBm);
 
     string adrMethod = default("max");
     double adrDeviceMargin = default(15);

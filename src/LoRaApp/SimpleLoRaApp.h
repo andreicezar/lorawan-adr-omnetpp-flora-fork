@@ -48,7 +48,10 @@ class SimpleLoRaApp : public cSimpleModule, public ILifecycle
         std::pair<double,double> generateUniformCircleCoordinates(double radius, double gatewayX, double gatewayY);
         void sendDownMgmtPacket();
         // AFLoRa: data uplinks (sendJoinRequest sent data in FLoRa).
+        void sendConfData();
         void sendUnConfData();
+        void sendData(int msgType, const char *name);
+        bool useACK = false;   // AFLoRa: confirmedTx
 
         int numberOfPacketsToSend;
         int sentPackets;

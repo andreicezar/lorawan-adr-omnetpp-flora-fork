@@ -24,6 +24,8 @@ module LoRaMac extends CsmaCaMac
     parameters:
         bitrate = 250bps;
         @class(LoRaMac);
+        @signal[LoRa_MacFrameSent](type=long); // AFLoRa: every transmitted frame, value = MType
+        @statistic[LoRa_MacFrameSent](source=LoRa_MacFrameSent; record=count);
 
         // AFLoRa: the radio parameters and the end-device side of ADR (ADRACKReq, backoff,
         // LinkADRReq) belong to the MAC. Moved here from SimpleLoRaApp, same names and defaults.
@@ -34,6 +36,14 @@ module LoRaMac extends CsmaCaMac
         int initialLoRaCR = default(4);
         bool initialUseHeader = default(true);
         bool evaluateADRinNode = default(false);
+
+        // AFLoRa: confirmed uplinks (SimpleLoRaApp.confirmedTx). Without an ACK in RX1/RX2 the
+        // frame is sent again after a random 1..3 s, up to maxRetry transmissions in all (fixed
+        // at 8 in AFLoRa). sfModePar: SF on retransmissions, SFM0 one step up every two retries
+        // (LoRaWAN), SFM1 unchanged, SFM2 circular SF7..SF12, SFM3 like SFM0 plus one step down
+        // per ACK.
+        int maxRetry = default(8);
+        string sfModePar = default("SFM0");
     gates:
         input upperMgmtIn;
         output upperMgmtOut;

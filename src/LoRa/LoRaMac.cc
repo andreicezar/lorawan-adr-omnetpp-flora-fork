@@ -40,6 +40,7 @@ LoRaMac::~LoRaMac()
     cancelAndDelete(endDelay_2);
     cancelAndDelete(endListening_2);
     cancelAndDelete(mediumStateChange);
+    cancelAndDelete(retransmission);
 }
 
 /****************************************************************
@@ -90,6 +91,24 @@ void LoRaMac::initialize(int stage)
         evaluateADRinNode = par("evaluateADRinNode");
         sequenceNumberRemote = 0;
 
+        // AFLoRa: confirmed uplinks
+        maxRetry = par("maxRetry");
+        countRetry = 0;
+        ACKPending = false;
+        retry = false;
+        sfModePar = par("sfModePar").stdstringValue();
+        if (sfModePar == "SFM0")
+            sfMode = SFM0;
+        else if (sfModePar == "SFM1")
+            sfMode = SFM1;
+        else if (sfModePar == "SFM2")
+            sfMode = SFM2;
+        else if (sfModePar == "SFM3")
+            sfMode = SFM3;
+        else
+            throw cRuntimeError("Unknown sfModePar '%s' (SFM0, SFM1, SFM2 or SFM3)", sfModePar.c_str());
+        LoRa_MacFrameSent = registerSignal("LoRa_MacFrameSent");
+
         // initialize self messages
         endTransmission = new cMessage("Transmission");
         endReception = new cMessage("Reception");
@@ -99,6 +118,7 @@ void LoRaMac::initialize(int stage)
         endDelay_2 = new cMessage("Delay_2");
         endListening_2 = new cMessage("Listening_2");
         mediumStateChange = new cMessage("MediumStateChange");
+        retransmission = new cMessage("Retransmission");
 
         // set up internal queue
         txQueue = getQueue(gate(upperLayerInGateId));//check_and_cast<queueing::IPacketQueue *>(getSubmodule("queue"));
@@ -121,6 +141,17 @@ void LoRaMac::initialize(int stage)
         numSentBroadcast = 0;
         numReceivedBroadcast = 0;
         numADRCommandReceived = 0;
+        numAckReceivedNoRetry = 0;
+        numSentConFrames = 0;
+        numSentUnconFrames = 0;
+        numAckReceived = 0;
+        numAckSent = 0;
+        numAckNotReceived = 0;
+        sfSentCount.setName("SF node count");
+        tpSentCount.setName("TP tx frame");
+        reqSendPkConfd.setName("Req send con pk");
+        reqSendPkUnConfd.setName("Req send uncon pk");
+        rcvdAckPk.setName("Recvd ACK pk");
 
         // initialize watches
         WATCH(fsm);
@@ -135,6 +166,9 @@ void LoRaMac::initialize(int stage)
         WATCH(numSentBroadcast);
         WATCH(numReceivedBroadcast);
         WATCH(numADRCommandReceived);
+        WATCH(numAckReceived);
+        WATCH(numAckSent);
+        WATCH(numAckNotReceived);
         WATCH(loRaRadio->loRaSF);
         WATCH(loRaRadio->loRaTP);
     }
@@ -153,6 +187,13 @@ void LoRaMac::finish()
     recordScalar("numSentBroadcast", numSentBroadcast);
     recordScalar("numReceivedBroadcast", numReceivedBroadcast);
     recordScalar("numADRCommandReceived", numADRCommandReceived);
+    // AFLoRa
+    recordScalar("numAckReceivedNoRetry", numAckReceivedNoRetry);
+    recordScalar("numSentConFrames", numSentConFrames);
+    recordScalar("numSentUnconFrames", numSentUnconFrames);
+    recordScalar("numAckReceived", numAckReceived);
+    recordScalar("numAckSent", numAckSent);
+    recordScalar("numAckNotReceived", numAckNotReceived);
 }
 
 void LoRaMac::configureNetworkInterface()
@@ -177,6 +218,8 @@ void LoRaMac::configureNetworkInterface()
 void LoRaMac::handleSelfMessage(cMessage *msg)
 {
     EV << "received self message: " << msg << endl;
+    if (msg == retransmission)
+        retry = true;   // AFLoRa: the frame waiting for its ACK may go again
     handleWithFsm(msg);
 }
 #if 0
@@ -212,6 +255,15 @@ void LoRaMac::handleUpperPacket(Packet *packet)
     packet->addTagIfAbsent<PacketProtocolTag>()->setProtocol(&Protocol::apskPhy);
 
     EV << "frame " << packet << " received from higher layer " << endl;
+    // AFLoRa: packets the app asked to send, by type
+    if (simTime() >= getSimulation()->getWarmupPeriod()) {
+        auto loraTag = packet->findTag<LoRaTag>();
+        int mType = loraTag ? loraTag->getMType() : UCONF_DATA_UP;
+        if (mType == CONF_DATA_UP)
+            reqSendPkConfd.record(1);
+        if (mType == UCONF_DATA_UP)
+            reqSendPkUnConfd.record(1);
+    }
     auto pktEncap = encapsulate(packet);
     const auto &frame = pktEncap->peekAtFront<LoRaMacFrame>();
     if (frame == nullptr)
@@ -244,7 +296,8 @@ queueing::IPassivePacketSource *LoRaMac::getProvider(const cGate *gate)
 void LoRaMac::handleCanPullPacketChanged(const cGate *gate)
 {
     Enter_Method("handleCanPullPacketChanged");
-    if (fsm.getState() == IDLE && !txQueue->isEmpty()) {
+    // AFLoRa: a frame waiting for its ACK keeps the MAC busy; new packets wait in the queue.
+    if (fsm.getState() == IDLE && !txQueue->isEmpty() && currentTxFrame == nullptr && !isTxDeferred()) {
         processUpperPacket();
     }
 }
@@ -270,7 +323,12 @@ void LoRaMac::handleWithFsm(cMessage *msg)
         {
             FSMA_Enter(FSMA_Delay_Action(turnOffReceiver()));
             FSMA_Event_Transition(Idle-Transmit,
-                                  isUpperMessage(msg),
+                                  isUpperMessage(msg) && !isTxDeferred(),
+                                  TRANSMIT,
+            );
+            // AFLoRa: the frame waiting for its ACK goes again when the retry timer fires.
+            FSMA_Event_Transition(Idle-Transmit-Pending,
+                                  msg == retransmission && currentTxFrame != nullptr && !isTxDeferred(),
                                   TRANSMIT,
             );
         }
@@ -380,12 +438,15 @@ void LoRaMac::handleWithFsm(cMessage *msg)
 //        }
 //    }
 
+    // AFLoRa: nothing starts while the MAC defers transmissions (a frame waiting for its retry).
     if (fsm.getState() == IDLE) {
         if (isReceiving())
             handleWithFsm(mediumStateChange);
-        else if (currentTxFrame != nullptr)
-            handleWithFsm(currentTxFrame);
-        else if (!txQueue->isEmpty()) {
+        else if (currentTxFrame != nullptr) {
+            if (!isTxDeferred())
+                handleWithFsm(currentTxFrame);
+        }
+        else if (!txQueue->isEmpty() && !isTxDeferred()) {
             processUpperPacket();
         }
     }
@@ -492,6 +553,16 @@ Packet *LoRaMac::decapsulate(Packet *frame)
 void LoRaMac::sendDataFrame(Packet *frameToSend)
 {
     EV << "sending Data frame\n";
+
+    // AFLoRa: a confirmed uplink waits for its ACK; while it does, every new send is a retry.
+    const auto &header = frameToSend->peekAtFront<LoRaMacFrame>();
+    if (ACKPending) {
+        EV << "as a retransmission\n";
+        numRetry++;
+    }
+    else if (header->getMType() == CONF_DATA_UP)
+        ACKPending = true;
+
     radio->setRadioMode(IRadio::RADIO_MODE_TRANSMITTER);
 
     auto frameCopy = frameToSend->dup();
@@ -507,6 +578,15 @@ void LoRaMac::sendDataFrame(Packet *frameToSend)
     macAddressInd->setDestAddress(macHeader->getReceiverAddress());
 
     //frameCopy->addTag<PacketProtocolTag>()->setProtocol(&Protocol::lora);
+
+    // AFLoRa statistics
+    sfSentCount.record(getPresentSF());
+    tpSentCount.record(getPresentTP());
+    emit(LoRa_MacFrameSent, (intval_t)macHeader->getMType());
+    if (macHeader->getMType() == CONF_DATA_UP)
+        numSentConFrames++;
+    if (macHeader->getMType() == UCONF_DATA_UP)
+        numSentUnconFrames++;
 
     sendDown(frameCopy);
 }
@@ -542,7 +622,9 @@ void LoRaMac::finishCurrentTransmission()
     scheduleAt(simTime() + waitDelay1Time + listening1Time, endListening_1);
     scheduleAt(simTime() + waitDelay1Time + listening1Time + waitDelay2Time, endDelay_2);
     scheduleAt(simTime() + waitDelay1Time + listening1Time + waitDelay2Time + listening2Time, endListening_2);
-    deleteCurrentTxFrame();
+    // AFLoRa: a confirmed uplink is kept until its ACK arrives or the retries run out.
+    if (!ACKPending)
+        deleteCurrentTxFrame();
     //popTxQueue();
 }
 
@@ -597,6 +679,26 @@ MacAddress LoRaMac::getAddress()
 void LoRaMac::manageFrame(const Ptr<const LoRaMacFrame> &frame)
 {
     sequenceNumberRemote = frame->getSequenceNumber();
+    // ACK of the confirmed uplink waiting in currentTxFrame
+    if (frame->getACK()) {
+        ACKPending = false;
+        retry = false;
+        if (sfMode == SFM3 && loRaRadio->loRaSF > 7)
+            loRaRadio->loRaSF--;
+        if (countRetry == 0) {
+            if (simTime() >= getSimulation()->getWarmupPeriod())
+                numAckReceivedNoRetry++;
+        }
+        else
+            countRetry = 0;
+        if (simTime() >= getSimulation()->getWarmupPeriod()) {
+            numAckReceived++;
+            rcvdAckPk.record(1);
+        }
+        if (currentTxFrame != nullptr)
+            deleteCurrentTxFrame();
+        EV << "Received Ack frame\n";
+    }
     // Any downlink resets the ADRACKReq counter; the options carry a LinkADRReq.
     if (evaluateADRinNode) {
         ADR_ACK_CNT = 0;
@@ -615,7 +717,41 @@ void LoRaMac::manageFrame(const Ptr<const LoRaMacFrame> &frame)
 
 void LoRaMac::setRetransmission()
 {
-    // No downlink in RX1 nor RX2: ADRACKReq after ADR_ACK_LIMIT uplinks, one SF step up after
+    // No downlink in RX1 nor RX2. A confirmed uplink goes again after a random 1..3 s, with the
+    // SF of the chosen mode, until maxRetry transmissions; then it is dropped.
+    if (ACKPending) {
+        countRetry++;
+        if (countRetry < maxRetry) {
+            if (sfMode == SFM0 || sfMode == SFM2 || sfMode == SFM3) {
+                if (loRaRadio->loRaSF < 12 && (countRetry % 2) == 0) {
+                    loRaRadio->loRaSF++;
+                    setCurrentTxFrameSF(loRaRadio->loRaSF);
+                }
+                else if (sfMode == SFM2 && loRaRadio->loRaSF == 12 && (countRetry % 2) == 0) {
+                    loRaRadio->loRaSF = 7;
+                    setCurrentTxFrameSF(loRaRadio->loRaSF);
+                }
+            }
+            acktimeoutTime = intuniform(1, 3);
+            retry = false;
+            if (retransmission->isScheduled())
+                cancelEvent(retransmission);
+            scheduleAt(simTime() + acktimeoutTime, retransmission);
+        }
+        else {
+            retry = false;
+            ACKPending = false;
+            countRetry = 0;
+            if (simTime() >= getSimulation()->getWarmupPeriod()) {
+                numAckNotReceived++;
+                numGivenUp++;
+            }
+            if (currentTxFrame != nullptr)
+                deleteCurrentTxFrame();
+            EV << "Max Retries. Drop frame\n";
+        }
+    }
+    // ADRACKReq after ADR_ACK_LIMIT uplinks without a downlink, one SF step up after
     // ADR_ACK_LIMIT + ADR_ACK_DELAY (FLoRa did this in SimpleLoRaApp when sending).
     if (evaluateADRinNode) {
         ADR_ACK_CNT++;
@@ -632,6 +768,24 @@ void LoRaMac::increaseSFIfPossible()
 {
     if (loRaRadio->loRaSF < 12)
         loRaRadio->loRaSF++;
+}
+
+bool LoRaMac::isTxDeferred() const
+{
+    // AFLoRa txDeferred: a frame waiting for its ACK goes again only once the retry timer fired.
+    if (ACKPending)
+        return !retry;
+    return false;
+}
+
+void LoRaMac::setCurrentTxFrameSF(int sf)
+{
+    if (currentTxFrame == nullptr)
+        return;
+    auto header = currentTxFrame->removeAtFront<LoRaMacFrame>();
+    header->setLoRaSF(sf);
+    currentTxFrame->insertAtFront(header);
+    currentTxFrame->getTagForUpdate<LoRaTag>()->setSpreadFactor(sf);
 }
 
 double LoRaMac::getPresentTP()

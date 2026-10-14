@@ -46,6 +46,16 @@ void NetworkServerApp::initialize(int stage)
         adrDeviceMargin = par("adrDeviceMargin");
         receivedRSSI.setName("Received RSSI");
         totalReceivedPackets = 0;
+        // AFLoRa
+        totalReceivedFrames1GW = 0;
+        totalRcvdConfFrames1GW = 0;
+        totalRcvdUnconfFrames1GW = 0;
+        rcvdPkUnConfd.setName("Rcvd Pk Unconfirmed");
+        rcvdPkConfd.setName("Rcvd Pk Confirmed");
+        rcvdFrUnConfd.setName("Rcvd Fr Unconfirmed");
+        rcvdFrConfd.setName("Rcvd Fr Confirmed");
+        iniTP = par("initialLoRaTP").doubleValue();
+        TPnow = iniTP;
         for(int i=0;i<6;i++)
         {
             counterUniqueReceivedPacketsPerSF[i] = 0;
@@ -91,6 +101,16 @@ void NetworkServerApp::processLoraMACPacket(Packet *pk)
         delete pk;
         return;
     }
+    // AFLoRa: frames received (every gateway copy that passed the filter), by type
+    totalReceivedFrames1GW++;
+    if (frame->getMType() == CONF_DATA_UP) {
+        totalRcvdConfFrames1GW++;
+        rcvdFrConfd.record(1);
+    }
+    if (frame->getMType() == UCONF_DATA_UP) {
+        totalRcvdUnconfFrames1GW++;
+        rcvdFrUnConfd.record(1);
+    }
     addPktToProcessingTable(pk);
 }
 
@@ -113,6 +133,10 @@ void NetworkServerApp::finish()
 
     receivedRSSI.recordAs("receivedRSSI");
     recordScalar("totalReceivedPackets", totalReceivedPackets);
+    // AFLoRa
+    recordScalar("totalReceivedFrames1GW", totalReceivedFrames1GW);
+    recordScalar("totalRcvdConfFrames1GW", totalRcvdConfFrames1GW);
+    recordScalar("totalRcvdUnconfFrames1GW", totalRcvdUnconfFrames1GW);
 
     while(!receivedPackets.empty()) {
         receivedPackets.back().endOfWaiting->removeControlInfo();
@@ -175,6 +199,21 @@ bool NetworkServerApp::isPacketProcessed(const Ptr<const LoRaMacFrame> &pkt)
     return false;
 }
 
+// AFLoRa: a packet counts as received once per sequence number, so that the retransmissions
+// of a confirmed uplink do not count as new packets.
+bool NetworkServerApp::isPacketNew(const Ptr<const LoRaMacFrame> &frame)
+{
+    for (auto &elem : knownNodes) {
+        if (elem.srcAddr == frame->getTransmitterAddress()) {
+            if (elem.lastSeqProcessed < frame->getSequenceNumber()) {
+                elem.lastSeqProcessed = frame->getSequenceNumber();
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void NetworkServerApp::updateKnownNodes(Packet* pkt)
 {
     const auto & frame = pkt->peekAtFront<LoRaMacFrame>();
@@ -195,6 +234,8 @@ void NetworkServerApp::updateKnownNodes(Packet* pkt)
         knownNode newNode;
         newNode.srcAddr= frame->getTransmitterAddress();
         newNode.lastSeqNoProcessed = frame->getSequenceNumber();
+        newNode.lastSeqProcessed = frame->getSequenceNumber() - 1;   // AFLoRa
+        newNode.lastSentSeqNumber = 0;                               // AFLoRa
         newNode.framesFromLastADRCommand = 0;
         newNode.numberOfSentADRPackets = 0;
         newNode.historyAllSNIR = new cOutVector;
@@ -248,10 +289,6 @@ void NetworkServerApp::processScheduledPacket(cMessage* selfMsg)
     auto pkt = check_and_cast<Packet *>(selfMsg->removeControlInfo());
     const auto & frame = pkt->peekAtFront<LoRaMacFrame>();
 
-    if (simTime() >= getSimulation()->getWarmupPeriod())
-    {
-        counterUniqueReceivedPacketsPerSF[frame->getLoRaSF()-7]++;
-    }
     L3Address pickedGateway;
     double SNIRinGW = -99999999999;
     double RSSIinGW = -99999999999;
@@ -281,15 +318,33 @@ void NetworkServerApp::processScheduledPacket(cMessage* selfMsg)
             }
         }
     }
-    emit(LoRa_ServerPacketReceived, true);
-    if (simTime() >= getSimulation()->getWarmupPeriod())
+    // AFLoRa: counted once per sequence number (retransmissions of a confirmed uplink share it)
+    if (isPacketNew(frame))
     {
-        counterUniqueReceivedPackets++;
+        emit(LoRa_ServerPacketReceived, true);
+        if (simTime() >= getSimulation()->getWarmupPeriod())
+        {
+            counterUniqueReceivedPackets++;
+            counterUniqueReceivedPacketsPerSF[frame->getLoRaSF()-7]++;
+            if (frame->getMType() == UCONF_DATA_UP)
+                rcvdPkUnConfd.record(1);
+            else if (frame->getMType() == CONF_DATA_UP)
+                rcvdPkConfd.record(1);
+        }
     }
     receivedRSSI.collect(frame->getRSSI());
-    if(evaluateADRinServer)
+    // AFLoRa: a confirmed uplink is answered with an ACK (no ADR); an unconfirmed one goes to
+    // ADR when the server runs it.
+    if (frame->getMType() == CONF_DATA_UP)
     {
-        evaluateADR(pkt, pickedGateway, SNIRinGW, RSSIinGW);
+        ackmentPacket(pkt, pickedGateway, SNIRinGW, RSSIinGW);
+    }
+    if (frame->getMType() == UCONF_DATA_UP)
+    {
+        if(evaluateADRinServer)
+            evaluateADR(pkt, pickedGateway, SNIRinGW, RSSIinGW);
+        else
+            unConfPacket(pkt, pickedGateway, SNIRinGW, RSSIinGW);
     }
     delete receivedPackets[packetNumber].rcvdPacket;
     delete selfMsg;
@@ -423,7 +478,7 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
         frameToSend->setReceiverAddress(frame->getTransmitterAddress());
         //FIXME: What value to set for LoRa TP
         //frameToSend->setLoRaTP(pkt->getLoRaTP());
-        frameToSend->setLoRaTP(math::dBmW2mW(14));
+        frameToSend->setLoRaTP(math::dBmW2mW(TPnow));   // AFLoRa: initialLoRaTP (FLoRa: 14 dBm)
         frameToSend->setLoRaCF(frame->getLoRaCF());
         frameToSend->setLoRaSF(frame->getLoRaSF());
         frameToSend->setLoRaBW(frame->getLoRaBW());
@@ -437,6 +492,65 @@ void NetworkServerApp::evaluateADR(Packet* pkt, L3Address pickedGateway, double 
 
     }
     //delete pkt;
+}
+
+// AFLoRa: ACK downlink for a confirmed uplink, sent through the gateway that heard it best.
+void NetworkServerApp::ackmentPacket(Packet *pkt, L3Address pickedGateway, double SNIRinGW, double RSSIinGW)
+{
+    const auto & frame = pkt->peekAtFront<LoRaMacFrame>();
+    int lastSequenceNumber = 0;
+    for (auto &elem : knownNodes)
+    {
+        if (elem.srcAddr == frame->getTransmitterAddress())
+        {
+            lastSequenceNumber = elem.lastSentSeqNumber++;
+            elem.historyAllSNIR->record(SNIRinGW);
+            elem.historyAllRSSI->record(RSSIinGW);
+            elem.receivedSeqNumber->record(frame->getSequenceNumber());
+            if (elem.adrListSNIR.size() == 20) elem.adrListSNIR.pop_front();
+        }
+    }
+
+    auto ackPacket = makeShared<LoRaAppPacket>();
+    ackPacket->setMsgType(UCONF_DATA_DW);   // no data pending, unconfirmed downlink
+    ackPacket->setChunkLength(B(par("headerLength").intValue()));
+
+    auto frameToSend = makeShared<LoRaMacFrame>();
+    frameToSend->setChunkLength(B(par("headerLength").intValue()));
+    frameToSend->setReceiverAddress(frame->getTransmitterAddress());
+    frameToSend->setLoRaTP(math::dBmW2mW(TPnow));
+    frameToSend->setLoRaCF(frame->getLoRaCF());
+    frameToSend->setLoRaSF(frame->getLoRaSF());
+    frameToSend->setLoRaBW(frame->getLoRaBW());
+    frameToSend->setLoRaUseHeader(true);
+    frameToSend->setLoRaCR(4);
+    frameToSend->setACK(true);
+    frameToSend->setSequenceNumber(lastSequenceNumber);
+    frameToSend->setMType(UCONF_DATA_DW);
+    frameToSend->setFOpsLen(NO_OPTIONS);
+
+    auto pktAux = new Packet("ACKFrame");
+    pktAux->insertAtFront(ackPacket);
+    pktAux->insertAtFront(frameToSend);
+    EV << "ACK sent " << pktAux->getName() << endl;
+    socket.sendTo(pktAux, pickedGateway, destPort);
+}
+
+// AFLoRa: bookkeeping of an unconfirmed uplink when the server does not run ADR.
+void NetworkServerApp::unConfPacket(Packet *pkt, L3Address pickedGateway, double SNIRinGW, double RSSIinGW)
+{
+    const auto & frame = pkt->peekAtFront<LoRaMacFrame>();
+    for (auto &elem : knownNodes)
+    {
+        if (elem.srcAddr == frame->getTransmitterAddress())
+        {
+            elem.lastSentSeqNumber++;
+            elem.historyAllSNIR->record(SNIRinGW);
+            elem.historyAllRSSI->record(RSSIinGW);
+            elem.receivedSeqNumber->record(frame->getSequenceNumber());
+            if (elem.adrListSNIR.size() == 20) elem.adrListSNIR.pop_front();
+        }
+    }
 }
 
 void NetworkServerApp::receiveSignal(cComponent *source, simsignal_t signalID, intval_t value, cObject *details)

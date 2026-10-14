@@ -32,6 +32,8 @@ simple SimpleLoRaApp like IApp
         volatile double timeToFirstPacket @unit(s) = default(10s);
         volatile double timeToNextPacket @unit(s) = default(10s);
         int dataSize @unit(B) = default(10B);
+        // AFLoRa: send confirmed uplinks (CONF_DATA_UP); the network server answers each with an ACK.
+        bool confirmedTx = default(false);
     gates:
         input socketIn @labels(LoRaAppPacket/up);
         output socketOut @labels(LoRaAppPacket/down);

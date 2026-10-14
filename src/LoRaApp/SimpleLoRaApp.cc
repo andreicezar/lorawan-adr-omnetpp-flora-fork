@@ -62,6 +62,7 @@ void SimpleLoRaApp::initialize(int stage)
 
         // AFLoRa: the LoRa physical layer parameters and evaluateADRinNode moved to LoRaMac.
         loRaMac = check_and_cast<LoRaMac *>(getParentModule()->getSubmodule("LoRaNic")->getSubmodule("mac"));
+        useACK = par("confirmedTx");
         sfVector.setName("SF Vector");
         tpVector.setName("TP Vector");
     }
@@ -101,7 +102,10 @@ void SimpleLoRaApp::handleMessage(cMessage *msg)
     if (msg->isSelfMessage()) {
         if (msg == sendMeasurements)
         {
-            sendUnConfData();
+            if (useACK)
+                sendConfData();
+            else
+                sendUnConfData();
             if (simTime() >= getSimulation()->getWarmupPeriod())
                 sentPackets++;
             delete msg;
@@ -149,21 +153,31 @@ bool SimpleLoRaApp::handleOperationStage(LifecycleOperation *operation, IDoneCal
     return true;
 }
 
+void SimpleLoRaApp::sendConfData()
+{
+    sendData(CONF_DATA_UP, "ConfDataFrame");
+}
+
 void SimpleLoRaApp::sendUnConfData()
 {
-    auto pktRequest = new Packet("UnConfDataFrame");
-    pktRequest->setKind(UCONF_DATA_UP);
+    sendData(UCONF_DATA_UP, "UnConfDataFrame");
+}
+
+void SimpleLoRaApp::sendData(int msgType, const char *name)
+{
+    auto pktRequest = new Packet(name);
+    pktRequest->setKind(msgType);
 
     auto payload = makeShared<LoRaAppPacket>();
     payload->setChunkLength(B(par("dataSize").intValue()));
-    payload->setMsgType(UCONF_DATA_UP);
+    payload->setMsgType(msgType);
 
     lastSentMeasurement = rand();
     payload->setSampleMeasurement(lastSentMeasurement);
 
     // AFLoRa: the MAC sets TP, SF, CF, BW and CR; the app only says what kind of uplink this is.
     auto loraTag = pktRequest->addTagIfAbsent<LoRaTag>();
-    loraTag->setMType(UCONF_DATA_UP);
+    loraTag->setMType(msgType);
 
     sfVector.record(loRaMac->getPresentSF());
     tpVector.record(loRaMac->getPresentTP());
