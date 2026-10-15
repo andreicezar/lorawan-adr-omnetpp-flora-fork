@@ -45,6 +45,7 @@ void LoRaTransmitter::initialize(int stage)
             iAmGateway = true;
         } else iAmGateway = false;
         afloraAirtime = strcmp(par("airtimeFormula").stringValue(), "aflora") == 0;
+        frameAirtime = strcmp(par("airtimePayload").stringValue(), "frame") == 0;
     }
 }
 
@@ -69,7 +70,10 @@ const ITransmission *LoRaTransmitter::createTransmission(const IRadio *transmitt
 
     //preambleDuration = Tpreamble;
     int payloadBytes = 0;
-    if(iAmGateway) payloadBytes = 15;
+    if (frameAirtime)
+        // ours: everything after the PHY preamble chunk, i.e. the MAC header and the payload
+        payloadBytes = (int)((macFrame->getTotalLength() - frame->getChunkLength()).get() / 8);
+    else if(iAmGateway) payloadBytes = 15;
     else payloadBytes = 20;
     simtime_t Theader;
     simtime_t Tpayload;

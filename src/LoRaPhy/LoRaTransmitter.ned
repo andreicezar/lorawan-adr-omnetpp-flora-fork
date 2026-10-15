@@ -23,11 +23,16 @@ module LoRaTransmitter extends NarrowbandTransmitterBase
         @signal[LoRaTransmissionCreated](type=bool); // optional
         @statistic[LoRaTransmissionCreated](source=LoRaTransmissionCreated; record=count);
         modulation = default("LoRaModulation");
-        // Airtime of a frame (20 B from a device, 15 B from a gateway, in both formulas).
+        // Airtime of a frame (of the payload length chosen by airtimePayload, in both formulas).
         // "flora": FLoRa's formula, integer division before ceil(), no low data rate
         // optimisation, and 8 payload symbols counted twice. "aflora": AFLoRa's correction, the
         // Semtech formula (real ceil(), low data rate optimisation at SF11-12, CRC on, explicit
         // header).
         string airtimeFormula @enum("flora", "aflora") = default("flora");
+        // Ours: the payload length the airtime is computed for. "fixed": FLoRa's and AFLoRa's
+        // 20 B from a device and 15 B from a gateway, whatever the frame. "frame": the frame as
+        // built, MAC header plus app payload (from a device: CsmaCaMac's 17 B header plus
+        // dataSize; LoRaWAN would be 13 B with the MIC, ns-3 counts 9 B).
+        string airtimePayload @enum("fixed", "frame") = default("fixed");
         @class(LoRaTransmitter);
 }

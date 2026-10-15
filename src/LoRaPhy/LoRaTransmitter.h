@@ -35,6 +35,7 @@ class LoRaTransmitter : public FlatTransmitterBase {
 
         bool iAmGateway;
         bool afloraAirtime = false;   // airtimeFormula == "aflora"
+        bool frameAirtime = false;    // ours: airtimePayload == "frame"
 
         simsignal_t LoRaTransmissionCreated;
 
