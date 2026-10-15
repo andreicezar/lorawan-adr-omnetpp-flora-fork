@@ -53,6 +53,11 @@ public:
     int GW_presentSF = 0;
     double GW_presentTP = 0;
     cOutVector cGW_droppedDCVector;
+    // ours: device address and sequence number of each uplink passed up or dropped here
+    cOutVector tracePassUpAddr;
+    cOutVector tracePassUpSeq;
+    cOutVector traceDropNonBroadcastAddr;
+    cOutVector traceDropNonBroadcastSeq;
 
     virtual void handleUpperMessage(cMessage *msg) override;
     virtual void handleLowerMessage(cMessage *msg) override;

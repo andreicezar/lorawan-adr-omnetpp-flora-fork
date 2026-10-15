@@ -74,6 +74,13 @@ private:
     // AFLoRa: one sample per collision and per reception below sensitivity
     cOutVector cLoRaCollisions;
     cOutVector cRcvBelowSensitivity;
+    // ours: device address and sequence number of each uplink the gateway's PHY drops, to join
+    // the loss of a packet across layers (trace_* vectors, see OURS.md)
+    cOutVector traceCollisionAddr;
+    cOutVector traceCollisionSeq;
+    cOutVector traceBelowSensitivityAddr;
+    cOutVector traceBelowSensitivitySeq;
+    void recordGwDrop(const IReception *reception, bool collision);
 
 public:
   LoRaReceiver();

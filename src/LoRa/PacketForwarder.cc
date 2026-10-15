@@ -34,6 +34,8 @@ void PacketForwarder::initialize(int stage)
         LoRa_GWPacketReceived = registerSignal("LoRa_GWPacketReceived");
         localPort = par("localPort");
         destPort = par("destPort");
+        traceForwardAddr.setName("trace_pf_forward_addr");
+        traceForwardSeq.setName("trace_pf_forward_seq");
     } else if (stage == INITSTAGE_APPLICATION_LAYER) {
         startUDP();
         getSimulation()->getSystemModule()->subscribe("LoRa_AppPacketSent", this);
@@ -117,6 +119,8 @@ void PacketForwarder::processLoraMACPacket(Packet *pk)
         counterOfReceivedPackets++;
     pk->trimFront();
     auto frame = pk->removeAtFront<LoRaMacFrame>();
+    traceForwardAddr.record(frame->getTransmitterAddress().getInt());   // ours
+    traceForwardSeq.record(frame->getSequenceNumber());
 
     auto snirInd = pk->getTag<SnirInd>();
 

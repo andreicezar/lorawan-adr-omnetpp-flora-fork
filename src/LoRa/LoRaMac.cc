@@ -169,6 +169,8 @@ void LoRaMac::initialize(int stage)
         reqSendPkConfd.setName("Req send con pk");
         reqSendPkUnConfd.setName("Req send uncon pk");
         rcvdAckPk.setName("Recvd ACK pk");
+        traceTxAddr.setName("trace_ed_mac_tx_addr");
+        traceTxSeq.setName("trace_ed_mac_tx_seq");
 
         // initialize watches
         WATCH(fsm);
@@ -596,6 +598,8 @@ void LoRaMac::sendDataFrame(Packet *frameToSend)
     //ctrl->setDest(frameCopy->getReceiverAddress());
 //    frameCopy->setControlInfo(ctrl);
     auto macHeader = frameCopy->peekAtFront<LoRaMacFrame>();
+    traceTxAddr.record(macHeader->getTransmitterAddress().getInt());   // ours
+    traceTxSeq.record(macHeader->getSequenceNumber());
 
     auto macAddressInd = frameCopy->addTagIfAbsent<MacAddressInd>();
     macAddressInd->setSrcAddress(macHeader->getTransmitterAddress());

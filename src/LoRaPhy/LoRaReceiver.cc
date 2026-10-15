@@ -46,7 +46,23 @@ void LoRaReceiver::initialize(int stage)
         rcvBelowSensitivity = 0;
         cLoRaCollisions.setName("LoRa Collisions");
         cRcvBelowSensitivity.setName("Received Below Sensitivity");
+        traceCollisionAddr.setName("trace_gw_phy_drop_collision_addr");
+        traceCollisionSeq.setName("trace_gw_phy_drop_collision_seq");
+        traceBelowSensitivityAddr.setName("trace_gw_phy_drop_below_sensitivity_addr");
+        traceBelowSensitivitySeq.setName("trace_gw_phy_drop_below_sensitivity_seq");
     }
+}
+
+// ours: records which uplink the gateway's PHY dropped (the MAC frame follows the PHY preamble)
+void LoRaReceiver::recordGwDrop(const IReception *reception, bool collision)
+{
+    auto packet = reception->getTransmission()->getPacket();
+    auto preamble = dynamicPtrCast<const LoRaPhyPreamble>(packet->peekAtFront<FieldsChunk>());
+    if (!preamble)
+        return;
+    auto frame = packet->peekAt<LoRaMacFrame>(preamble->getChunkLength());
+    (collision ? traceCollisionAddr : traceBelowSensitivityAddr).record(frame->getTransmitterAddress().getInt());
+    (collision ? traceCollisionSeq : traceBelowSensitivitySeq).record(frame->getSequenceNumber());
 }
 
 void LoRaReceiver::finish()
@@ -85,6 +101,8 @@ bool LoRaReceiver::computeIsReceptionPossible(const IListening *listening, const
         if(isReceptionPossible == false) {
            const_cast<LoRaReceiver* >(this)->rcvBelowSensitivity++;
            const_cast<LoRaReceiver* >(this)->cRcvBelowSensitivity.record(1);
+           if (iAmGateway && (part == IRadioSignal::SIGNAL_PART_DATA || part == IRadioSignal::SIGNAL_PART_WHOLE))
+               const_cast<LoRaReceiver* >(this)->recordGwDrop(reception, false);
         }
         return isReceptionPossible;
     }
@@ -117,6 +135,8 @@ bool LoRaReceiver::computeIsReceptionAttempted(const IListening *listening, cons
             if (rec == MacAddress::BROADCAST_ADDRESS) {
                 const_cast<LoRaReceiver* >(this)->numCollisions++;
                 const_cast<LoRaReceiver* >(this)->cLoRaCollisions.record(1);
+                if (part == IRadioSignal::SIGNAL_PART_DATA || part == IRadioSignal::SIGNAL_PART_WHOLE)
+                    const_cast<LoRaReceiver* >(this)->recordGwDrop(reception, true);
             }
         }
         return false;

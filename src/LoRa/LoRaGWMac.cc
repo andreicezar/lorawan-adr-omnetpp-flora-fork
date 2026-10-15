@@ -44,6 +44,10 @@ void LoRaGWMac::initialize(int stage)
         GW_presentSF = 0;
         GW_presentTP = 0;
         cGW_droppedDCVector.setName("GW Dropped DC");
+        tracePassUpAddr.setName("trace_gw_mac_pass_up_addr");
+        tracePassUpSeq.setName("trace_gw_mac_pass_up_seq");
+        traceDropNonBroadcastAddr.setName("trace_gw_mac_drop_nonbroadcast_addr");
+        traceDropNonBroadcastSeq.setName("trace_gw_mac_drop_nonbroadcast_seq");
         WATCH(GW_presentSF);
         WATCH(GW_presentTP);
         if (!strcmp(addressString, "auto")) {
@@ -151,10 +155,16 @@ void LoRaGWMac::handleLowerMessage(cMessage *msg)
     auto pkt = check_and_cast<Packet *>(msg);
     auto header = pkt->popAtFront<LoRaPhyPreamble>();
     const auto &frame = pkt->peekAtFront<LoRaMacFrame>();
-    if(frame->getReceiverAddress() == MacAddress::BROADCAST_ADDRESS)
+    if(frame->getReceiverAddress() == MacAddress::BROADCAST_ADDRESS) {
+        tracePassUpAddr.record(frame->getTransmitterAddress().getInt());   // ours
+        tracePassUpSeq.record(frame->getSequenceNumber());
         sendUp(pkt);
-    else
+    }
+    else {
+        traceDropNonBroadcastAddr.record(frame->getTransmitterAddress().getInt());   // ours
+        traceDropNonBroadcastSeq.record(frame->getSequenceNumber());
         delete pkt;
+    }
 }
 
 void LoRaGWMac::sendPacketBack(Packet *receivedFrame)

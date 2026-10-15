@@ -54,6 +54,15 @@ void NetworkServerApp::initialize(int stage)
         rcvdPkConfd.setName("Rcvd Pk Confirmed");
         rcvdFrUnConfd.setName("Rcvd Fr Unconfirmed");
         rcvdFrConfd.setName("Rcvd Fr Confirmed");
+        // ours
+        traceRxAddr.setName("trace_ns_rx_addr");
+        traceRxSeq.setName("trace_ns_rx_seq");
+        traceRejectOldSeqAddr.setName("trace_ns_reject_oldseq_addr");
+        traceRejectOldSeqSeq.setName("trace_ns_reject_oldseq_seq");
+        traceMergeDuplicateAddr.setName("trace_ns_merge_duplicate_addr");
+        traceMergeDuplicateSeq.setName("trace_ns_merge_duplicate_seq");
+        traceAcceptAddr.setName("trace_ns_accept_addr");
+        traceAcceptSeq.setName("trace_ns_accept_seq");
         iniTP = par("initialLoRaTP").doubleValue();
         TPnow = iniTP;
         for(int i=0;i<6;i++)
@@ -80,6 +89,8 @@ void NetworkServerApp::handleMessage(cMessage *msg)
         const auto &frame  = pkt->peekAtFront<LoRaMacFrame>();
         if (frame == nullptr)
             throw cRuntimeError("Header error type");
+        traceRxAddr.record(frame->getTransmitterAddress().getInt());   // ours
+        traceRxSeq.record(frame->getSequenceNumber());
         //LoRaMacFrame *frame = check_and_cast<LoRaMacFrame *>(msg);
         if (simTime() >= getSimulation()->getWarmupPeriod())
         {
@@ -98,6 +109,8 @@ void NetworkServerApp::processLoraMACPacket(Packet *pk)
     const auto & frame = pk->peekAtFront<LoRaMacFrame>();
     if(isPacketProcessed(frame))
     {
+        traceRejectOldSeqAddr.record(frame->getTransmitterAddress().getInt());   // ours
+        traceRejectOldSeqSeq.record(frame->getSequenceNumber());
         delete pk;
         return;
     }
@@ -263,6 +276,8 @@ void NetworkServerApp::addPktToProcessingTable(Packet* pkt)
         if(frameAux->getTransmitterAddress() == frame->getTransmitterAddress() && frameAux->getSequenceNumber() == frame->getSequenceNumber())
         {
             packetExists = true;
+            traceMergeDuplicateAddr.record(frame->getTransmitterAddress().getInt());   // ours
+            traceMergeDuplicateSeq.record(frame->getSequenceNumber());
             const auto& networkHeader = getNetworkProtocolHeader(pkt);
             const L3Address& gwAddress = networkHeader->getSourceAddress();
             elem.possibleGateways.emplace_back(gwAddress, math::fraction2dB(frame->getSNIR()), frame->getRSSI());
@@ -324,6 +339,8 @@ void NetworkServerApp::processScheduledPacket(cMessage* selfMsg)
         emit(LoRa_ServerPacketReceived, true);
         if (simTime() >= getSimulation()->getWarmupPeriod())
         {
+            traceAcceptAddr.record(frame->getTransmitterAddress().getInt());   // ours
+            traceAcceptSeq.record(frame->getSequenceNumber());
             counterUniqueReceivedPackets++;
             counterUniqueReceivedPacketsPerSF[frame->getLoRaSF()-7]++;
             if (frame->getMType() == UCONF_DATA_UP)

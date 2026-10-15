@@ -38,6 +38,9 @@ class PacketForwarder : public cSimpleModule, public cListener
     // state
     UdpSocket socket;
     cMessage *selfMsg = nullptr;
+    // ours: device address and sequence number of each uplink forwarded to the network server
+    cOutVector traceForwardAddr;
+    cOutVector traceForwardSeq;
 
   protected:
     virtual void initialize(int stage) override;

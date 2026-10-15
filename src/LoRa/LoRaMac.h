@@ -189,6 +189,10 @@ class LoRaMac : public MacProtocolBase, public IMacProtocol, public queueing::IA
     cOutVector reqSendPkConfd;     // confirmed packets the app asked to send
     cOutVector reqSendPkUnConfd;   // unconfirmed packets the app asked to send
     cOutVector rcvdAckPk;          // ACKs received
+    // ours: address and sequence number of every transmitted frame, to join the loss of a
+    // packet across layers
+    cOutVector traceTxAddr;
+    cOutVector traceTxSeq;
     simsignal_t LoRa_MacFrameSent;
     //@}
 

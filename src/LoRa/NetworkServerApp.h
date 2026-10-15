@@ -90,6 +90,16 @@ class NetworkServerApp : public cSimpleModule, cListener
     cOutVector rcvdFrUnConfd;    // unconfirmed frames received
     double iniTP = 14;           // dBm
     double TPnow = 14;           // dBm, TX power of the downlinks
+    // ours: device address and sequence number of each uplink copy that arrives, is rejected as
+    // old, is merged with a copy from another gateway, or is accepted as a new packet
+    cOutVector traceRxAddr;
+    cOutVector traceRxSeq;
+    cOutVector traceRejectOldSeqAddr;
+    cOutVector traceRejectOldSeqSeq;
+    cOutVector traceMergeDuplicateAddr;
+    cOutVector traceMergeDuplicateSeq;
+    cOutVector traceAcceptAddr;
+    cOutVector traceAcceptSeq;
 
   protected:
     virtual void initialize(int stage) override;
