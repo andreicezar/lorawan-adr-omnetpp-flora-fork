@@ -65,6 +65,12 @@ scenario ini). Statistics are only added: every FLoRa output is still recorded.
   - AFLoRa's example simulations.
 - **`LoRa_GW_CountPacketsNodes`.** AFLoRa compared the signal name with `"LoRA_AppPacketSent"`, so
   the counter stayed 0. Here it counts the packets.
+- **Collision and capture model.** It is FLoRa 1.3.2's, unchanged. AFLoRa did not touch the receiver,
+  so it kept FLoRa 0.8's model: a fixed 6 dB capture threshold, and collisions only between frames on
+  the same SF. FLoRa switched to the non-orthogonal model (`nonOrthDelta`, 1 dB on the same SF) in
+  1.0.0 (commit `a401d30`, 2019). This is the one PHY difference between AFLoRa and this layer. In the
+  PHY scenarios of article 1, AFLoRa as published matches ns-3 cell for cell, while this layer
+  matches FLoRa 1.3.2.
 
 ## Limitations that come from AFLoRa (kept)
 
