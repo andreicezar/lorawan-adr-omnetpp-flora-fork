@@ -8,7 +8,8 @@ from the original can be traced and switched off:
 2. **AFLoRa v0.9** (lluiscas/AFLoRa, commit `9b1a049`; L. Casals, C. Gomez, R. Vidal, "The SF12
    Well in LoRaWAN: Problem and End-Device-Based Solutions", *Sensors* 21(19):6478, 2021). This file
    describes this layer.
-3. Our changes (ADRopt, FEC, NbTrans and the corrections from our reviews), in later commits.
+3. Our changes (ADRopt, FEC, NbTrans and the corrections from our reviews), from commit `783e3ea`
+   on, described in `OURS.md`; `simulations/ours.ini` switches them on.
 
 AFLoRa is based on FLoRa 0.8 and the INET 3 packet API, so it could not be applied as a patch. Each
 mechanism was rewritten on FLoRa 1.3.2, one commit per mechanism.
